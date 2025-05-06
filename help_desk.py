@@ -357,7 +357,6 @@ def run_help_desk(user_id: str, user_request: str) -> str:
                 general_steps = response.text.strip() if response and hasattr(response, 'text') else "No general steps available."
             except Exception as e:
                 logger.error(f"Error generating general steps: {e}")
-                general_steps = "1. Restart your device\n2. Check your network connection\n3. Make sure all cables are properly connected"
             
             response = f"I wasn't able to automatically resolve your issue. I've escalated this to our IT support team.\n\n"
             response += f"Ticket number: {escalation_result['ticket_number']}\n"
@@ -481,10 +480,7 @@ def escalate_issue(request_id: int, issue_description: str, keywords: List[str],
         logger.error(f"Error in escalate_issue: {str(e)}")
         raise
 
-if __name__ == "__main__":
-    user_id = "emp12345"
-    user_request = "My VPN is not working. I tried to connect but it keeps failing with a timeout error."
-    
+if __name__ == "__main__":    
     response = run_help_desk(user_id, user_request)
     print("\nFinal response to user:")
     print(response)
