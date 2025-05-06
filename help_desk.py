@@ -5,51 +5,35 @@ import json
 import time
 import google.generativeai as genai
 from dotenv import load_dotenv
-from langchain_google_genai import ChatGoogleGenerativeAI
 import os
+import logging
 
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
+# Load environment variables
 load_dotenv()
 
-
-# Configuration for Google Gemini
-# You would need to set up your API key
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") # Replace with actual API key in production
+# Validate environment variables
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-2
+
+if not GEMINI_API_KEY or not OPENROUTER_API_KEY:
+    raise ValueError("Missing required environment variables: GEMINI_API_KEY and/or OPENROUTER_API_KEY")
+
 # Initialize Gemini
 genai.configure(api_key=GEMINI_API_KEY)
 
 # Configuration for the agents
 config_list = [
     {
-        "model": "gemini-pro",  # Using Gemini Pro model
+        "model": "gemini-2.0-flash",
         "api_key": GEMINI_API_KEY
     }
 ]
 
-# Knowledge base for common IT issues
-KNOWLEDGE_BASE = {
-    "vpn": {
-        "not connecting": "Try these steps: 1) Restart your VPN client 2) Check your internet connection 3) Ensure your credentials are correct",
-        "slow": "VPN slowness can be caused by: network congestion, server distance, or bandwidth limitations. Try connecting to a different server."
-    },
-    "email": {
-        "cannot access": "Try these steps: 1) Verify your internet connection 2) Clear browser cache 3) Reset your email password",
-        "not receiving": "Check your spam folder, verify your account storage isn't full, ensure email forwarding isn't enabled incorrectly."
-    },
-    "password": {
-        "reset": "I can help reset your password. Please verify your employee ID for security purposes."
-    },
-    "printer": {
-        "not printing": "Check if: 1) Printer is powered on 2) Connected to network 3) Has paper and ink 4) Is set as default printer"
-    },
-    "software": {
-        "installation": "For software installation requests, I'll need: 1) Software name 2) Version 3) Business justification"
-    }
-}
-
-# Create a class to maintain system memory
+# System Memory Class
 class SystemMemory:
     def __init__(self):
         self.requests = {}
@@ -117,7 +101,6 @@ class SystemMemory:
             if score > 0:
                 similar_requests.append((req_id, request, score))
         
-        # Sort by score and return top results
         similar_requests.sort(key=lambda x: x[2], reverse=True)
         return [{"id": req_id, "request": req["request_text"], "resolution": req["resolution"]} 
                 for req_id, req, _ in similar_requests[:limit] if req["resolution"]]
@@ -125,13 +108,11 @@ class SystemMemory:
 # Initialize system memory
 system_memory = SystemMemory()
 
-# Helper functions for the agents
+# Helper Functions
 def extract_keywords(text: str) -> List[str]:
     """Extract keywords from user request text"""
-    # This is a simple implementation - in production, you'd use NLP techniques
     common_stopwords = ["i", "my", "me", "our", "we", "is", "are", "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "with"]
     
-    # Clean and split text
     text = text.lower()
     for char in ",.?!;:()[]{}\"'":
         text = text.replace(char, " ")
@@ -139,7 +120,6 @@ def extract_keywords(text: str) -> List[str]:
     words = text.split()
     keywords = [word for word in words if word not in common_stopwords and len(word) > 2]
     
-    # Add common IT categories if they appear in the text
     categories = ["vpn", "email", "password", "printer", "software", "network", "computer", "laptop", "wifi", "internet"]
     for category in categories:
         if category in text.lower() and category not in keywords:
@@ -147,40 +127,47 @@ def extract_keywords(text: str) -> List[str]:
             
     return keywords
 
-def find_knowledge_base_solution(keywords: List[str]) -> Tuple[bool, str]:
-    """Search the knowledge base for solutions based on keywords"""
-    for keyword in keywords:
-        if keyword in KNOWLEDGE_BASE:
-            # Search for specific issue within the category
-            for issue, solution in KNOWLEDGE_BASE[keyword].items():
-                if any(k in issue for k in keywords):
-                    return True, solution
-            
-            # If no specific issue matched but category exists, return the first solution
-            first_issue = list(KNOWLEDGE_BASE[keyword].keys())[0]
-            return True, KNOWLEDGE_BASE[keyword][first_issue]
+def generate_ai_solution(issue_description: str, keywords: List[str]) -> Tuple[bool, str]:
+    """Generate a solution using the AI model"""
+    prompt = f"""
+    You are an IT support specialist. A user has reported the following issue:
     
-    return False, "No solution found in knowledge base"
+    "{issue_description}"
+    
+    Keywords identified: {', '.join(keywords)}
+    
+    Please provide a step-by-step solution to this IT problem. Make your response concise yet thorough, 
+    focusing on practical troubleshooting steps the user can take. If the issue likely requires 
+    escalation to IT staff, mention that as well. Format your response as direct instructions to the user.
+    """
+    
+    try:
+        model = genai.GenerativeModel('gemini-2.0-flash')
+        response = model.generate_content(prompt)
+        
+        if response and hasattr(response, 'text') and response.text:
+            return True, response.text.strip()
+        return False, "I wasn't able to generate a specific solution for your issue. I recommend contacting IT support directly."
+    
+    except Exception as e:
+        logger.error(f"Error generating AI solution: {e}")
+        return False, f"Error generating solution: {str(e)}"
 
 def reset_password(employee_id: str) -> str:
     """Simulate password reset function"""
-    # In a real system, this would integrate with your ID management system
     return f"Password reset link has been sent to the email associated with employee ID: {employee_id}"
 
-# Custom AutoGen-compatible LLM class for Gemini
+# Custom Gemini LLM
 class GeminiLLM:
-    def __init__(self, model="gemini-pro", api_key=None):
+    def __init__(self, model="gemini-2.0-flash", api_key=None):
         self.model = model
-        # Initialize the model
         if api_key:
             genai.configure(api_key=api_key)
         
     def create(self, messages, max_tokens=1024):
         """Convert messages to Gemini format and generate a response"""
-        # Process messages to format compatible with Gemini
         prompt = self._format_messages(messages)
         
-        # Generate content
         generation_config = {
             "max_output_tokens": max_tokens,
             "temperature": 0.7,
@@ -192,7 +179,7 @@ class GeminiLLM:
             response = model.generate_content(prompt, generation_config=generation_config)
             return {"choices": [{"message": {"content": response.text}}]}
         except Exception as e:
-            print(f"Error generating content: {e}")
+            logger.error(f"Error generating content: {e}")
             return {"choices": [{"message": {"content": "I encountered an error processing your request."}}]}
     
     def _format_messages(self, messages):
@@ -214,9 +201,9 @@ class GeminiLLM:
                 
         return formatted_prompt.strip()
 
-# Define the agents
+# Agent System Messages
 user_intake_system_message = """
-You are the User Intake Agent for an IT help desk system. Your job is to:
+You are the User Intake Agent for an AI-powered IT help desk system. Your job is to:
 1. Greet the user and collect their issue description
 2. Extract key details about their problem
 3. Identify relevant keywords that categorize their issue
@@ -226,18 +213,18 @@ Be professional, courteous, and thorough in gathering information.
 """
 
 resolution_system_message = """
-You are the Resolution Agent for an IT help desk system. Your job is to:
+You are the Resolution Agent for an AI-powered IT help desk system. Your job is to:
 1. Analyze user issues based on keywords and details
-2. Search the knowledge base for solutions
-3. Provide step-by-step resolution instructions when available
+2. Generate tailored solutions using AI for the specific problem
+3. Provide step-by-step resolution instructions
 4. Execute functions like password resets when needed
 5. If you cannot resolve the issue, escalate to the Escalation Agent
 
-Be clear, precise, and helpful in your instructions.
+Be clear, precise, and helpful in your instructions. Draw from your knowledge of common IT issues.
 """
 
 escalation_system_message = """
-You are the Escalation Agent for an IT help desk system. Your job is to:
+You are the Escalation Agent for an AI-powered IT help desk system. Your job is to:
 1. Handle complex cases that couldn't be resolved automatically
 2. Generate a structured summary of the issue for human IT support
 3. Collect additional information that might help human agents resolve the issue
@@ -247,7 +234,7 @@ Be empathetic while maintaining professionalism.
 """
 
 master_system_message = """
-You are the Master Agent coordinating an IT help desk system. Your job is to:
+You are the Master Agent coordinating an AI-powered IT help desk system. Your job is to:
 1. Receive user requests and direct them to the User Intake Agent
 2. Manage communication between all agents
 3. Track request status in the system memory
@@ -257,135 +244,54 @@ You are the Master Agent coordinating an IT help desk system. Your job is to:
 Maintain a professional, efficient communication style.
 """
 
-
-
 llm_config = {
     "config_list": [
         {
-            "model": "anthropic/claude-3-opus",  # You can change this to gpt-4/gemini/etc.
+            "model": "anthropic/claude-3-opus",
             "api_key": OPENROUTER_API_KEY,
             "base_url": "https://openrouter.ai/api/v1"
         }
     ]
 }
 
-# Create the agents
-user_intake_agent = autogen.AssistantAgent(
-    name="User_Intake_Agent",
-    system_message=user_intake_system_message,
-    llm_config= llm_config
-)
-
-resolution_agent = autogen.AssistantAgent(
-    name="Resolution_Agent",
-    system_message=resolution_system_message,
-    llm_config=llm_config
-)
-
-escalation_agent = autogen.AssistantAgent(
-    name="Escalation_Agent",
-    system_message=escalation_system_message,
-    llm_config=llm_config
-)
-
-master_agent = autogen.AssistantAgent(
-    name="Master_Agent",
-    system_message=master_system_message,
-    llm_config=llm_config
-)
-
-user_proxy = autogen.UserProxyAgent(
-    name="User",
-    human_input_mode="TERMINATE",
-    max_consecutive_auto_reply=10,
-    is_termination_msg=lambda x: x.get("content", "").rstrip().endswith("TERMINATE"),
-    code_execution_config={"work_dir": "coding", "use_docker": False},
-)
-
-# Define functions for agents
-def process_intake(user_id: str, issue_description: str) -> Dict:
-    """Process the user intake and return structured information"""
-    request_id = system_memory.add_request(user_id, issue_description)
-    keywords = extract_keywords(issue_description)
-    
-    system_memory.update_request(
-        request_id=request_id,
-        agent="User_Intake_Agent",
-        action="processed_request",
-        details={"keywords": keywords}
+# Initialize Agents
+try:
+    user_intake_agent = autogen.AssistantAgent(
+        name="User_Intake_Agent",
+        system_message=user_intake_system_message,
+        llm_config=llm_config
     )
-    
-    return {
-        "request_id": request_id,
-        "user_id": user_id,
-        "issue_description": issue_description,
-        "keywords": keywords
-    }
 
-def attempt_resolution(request_id: int, keywords: List[str], issue_description: str) -> Dict:
-    """Attempt to resolve the issue using the knowledge base"""
-    # Look for similar past resolved issues
-    similar_requests = system_memory.get_similar_requests(keywords)
-    
-    # Check if solution exists in knowledge base
-    found, solution = find_knowledge_base_solution(keywords)
-    
-    if found:
-        system_memory.update_request(
-            request_id=request_id,
-            agent="Resolution_Agent",
-            action="found_solution",
-            details={"solution": solution}
-        )
-        
-        system_memory.set_resolution(request_id, solution)
-        
-        return {
-            "status": "resolved",
-            "solution": solution,
-            "similar_issues": similar_requests
-        }
-    else:
-        system_memory.update_request(
-            request_id=request_id,
-            agent="Resolution_Agent",
-            action="no_solution_found",
-            details={}
-        )
-        
-        return {
-            "status": "unresolved",
-            "message": "No direct solution found in knowledge base",
-            "similar_issues": similar_requests
-        }
-
-def escalate_issue(request_id: int, issue_description: str, keywords: List[str], attempted_solutions: List[str] = None) -> Dict:
-    """Escalate the issue to human IT support"""
-    # Generate a ticket number (in real system, would come from ticketing system)
-    ticket_number = f"IT-{request_id}-{int(time.time())}"
-    
-    summary = {
-        "ticket_number": ticket_number,
-        "user_id": system_memory.get_request(request_id)["user_id"],
-        "issue_description": issue_description,
-        "keywords": keywords,
-        "attempted_solutions": attempted_solutions or [],
-        "priority": "medium",  # Default priority, could be determined by keywords
-        "estimated_response_time": "4 hours"  # Default SLA
-    }
-    
-    system_memory.update_request(
-        request_id=request_id,
-        agent="Escalation_Agent",
-        action="escalated",
-        details=summary
+    resolution_agent = autogen.AssistantAgent(
+        name="Resolution_Agent",
+        system_message=resolution_system_message,
+        llm_config=llm_config
     )
-    
-    system_memory.set_status(request_id, "escalated")
-    
-    return summary
 
-# Set up the groupchat for agents to collaborate
+    escalation_agent = autogen.AssistantAgent(
+        name="Escalation_Agent",
+        system_message=escalation_system_message,
+        llm_config=llm_config
+    )
+
+    master_agent = autogen.AssistantAgent(
+        name="Master_Agent",
+        system_message=master_system_message,
+        llm_config=llm_config
+    )
+
+    user_proxy = autogen.UserProxyAgent(
+        name="User",
+        human_input_mode="TERMINATE",
+        max_consecutive_auto_reply=10,
+        is_termination_msg=lambda x: x.get("content", "").rstrip().endswith("TERMINATE"),
+        code_execution_config={"work_dir": "coding", "use_docker": False},
+    )
+except Exception as e:
+    logger.error(f"Error initializing agents: {str(e)}")
+    raise
+
+# Group Chat Setup
 groupchat = autogen.GroupChat(
     agents=[user_proxy, master_agent, user_intake_agent, resolution_agent, escalation_agent],
     messages=[],
@@ -394,61 +300,187 @@ groupchat = autogen.GroupChat(
 
 manager = autogen.GroupChatManager(groupchat=groupchat)
 
-# Main help desk function
-def run_help_desk(user_id: str, user_request: str):
+# Main Help Desk Function
+def run_help_desk(user_id: str, user_request: str) -> str:
     """Run the help desk system for a user request"""
-    # Step 1: Master agent receives the request
-    master_response = f"Received IT help request from user {user_id}. Processing..."
-    print(f"Master Agent: {master_response}")
-    
-    # Step 2: User Intake Agent processes the request
-    print(f"User Intake Agent: Analyzing request...")
-    intake_result = process_intake(user_id, user_request)
-    print(f"User Intake Agent: Extracted keywords: {intake_result['keywords']}")
-    
-    # Step 3: Resolution Agent attempts to resolve
-    print(f"Resolution Agent: Searching for solutions...")
-    resolution_result = attempt_resolution(
-        request_id=intake_result['request_id'],
-        keywords=intake_result['keywords'],
-        issue_description=intake_result['issue_description']
-    )
-    
-    # Step 4: Handle resolution or escalation
-    if resolution_result['status'] == 'resolved':
-        print(f"Resolution Agent: Issue resolved!")
-        response = f"I found a solution to your issue:\n\n{resolution_result['solution']}"
+    try:
+        if not user_id or user_id == "anonymous":
+            return "Please provide a valid Employee ID to process your request."
         
-        # Mention similar issues if available
-        if resolution_result['similar_issues']:
-            response += "\n\nI noticed similar issues were reported before. Here's what worked previously:"
-            for idx, issue in enumerate(resolution_result['similar_issues'], 1):
-                response += f"\n{idx}. Issue: {issue['request']}\n   Solution: {issue['resolution']}"
-                
-        print(f"Master Agent: {response}")
-        return response
-    else:
-        print(f"Resolution Agent: Could not resolve issue. Escalating...")
+        # Step 1: Master agent receives the request
+        logger.info(f"Received IT help request from user {user_id}")
         
-        # Step 5: Escalation Agent handles complex cases
-        escalation_result = escalate_issue(
+        # Step 2: User Intake Agent processes the request
+        intake_result = process_intake(user_id, user_request)
+        logger.info(f"Extracted keywords: {intake_result['keywords']}")
+        
+        # Step 3: Resolution Agent attempts to resolve
+        resolution_result = attempt_resolution(
             request_id=intake_result['request_id'],
-            issue_description=intake_result['issue_description'],
-            keywords=intake_result['keywords']
+            keywords=intake_result['keywords'],
+            issue_description=intake_result['issue_description']
         )
         
-        response = f"I wasn't able to automatically resolve your VPN issue. I've escalated this to our IT support team.\n\n"
-        response += f"Ticket number: {escalation_result['ticket_number']}\n"
-        response += f"Estimated response time: {escalation_result['estimated_response_time']}\n\n"
-        response += "In the meantime, here are some general troubleshooting steps for VPN issues:\n"
-        response += "1. Restart your computer and try connecting again\n"
-        response += "2. Check if you can access other websites to confirm your internet connection is working\n"
-        response += "3. Make sure you're using the latest version of the VPN client\n"
-        
-        print(f"Escalation Agent: {response}")
-        return response
+        # Step 4: Handle resolution or escalation
+        if resolution_result['status'] == 'resolved':
+            response = f"Here's a solution to your issue:\n\n{resolution_result['solution']}"
+            
+            if resolution_result['similar_issues']:
+                response += "\n\nI noticed similar issues were reported before. Here's what worked previously:"
+                for idx, issue in enumerate(resolution_result['similar_issues'], 1):
+                    response += f"\n{idx}. Issue: {issue['request']}\n   Solution: {issue['resolution']}"
+            
+            return response
+        else:
+            # Step 5: Escalation Agent handles complex cases
+            escalation_result = escalate_issue(
+                request_id=intake_result['request_id'],
+                issue_description=intake_result['issue_description'],
+                keywords=intake_result['keywords']
+            )
+            
+            # Generate general troubleshooting steps
+            general_steps_prompt = f"""
+            You are an IT support specialist. A user has the following issue:
+            
+            "{intake_result['issue_description']}"
+            
+            Keywords identified: {', '.join(intake_result['keywords'])}
+            
+            The issue is being escalated to IT staff, but in the meantime, provide 3-5 general troubleshooting 
+            steps the user can try while waiting. Keep them simple, safe, and unlikely to make the situation worse.
+            """
+            
+            try:
+                model = genai.GenerativeModel('gemini-2.0-flash')
+                response = model.generate_content(general_steps_prompt)
+                general_steps = response.text.strip() if response and hasattr(response, 'text') else "No general steps available."
+            except Exception as e:
+                logger.error(f"Error generating general steps: {e}")
+                general_steps = "1. Restart your device\n2. Check your network connection\n3. Make sure all cables are properly connected"
+            
+            response = f"I wasn't able to automatically resolve your issue. I've escalated this to our IT support team.\n\n"
+            response += f"Ticket number: {escalation_result['ticket_number']}\n"
+            response += f"Estimated response time: {escalation_result['estimated_response_time']}\n\n"
+            response += "In the meantime, here are some general troubleshooting steps you can try:\n"
+            response += general_steps
+            
+            return response
+    except Exception as e:
+        logger.error(f"Error in run_help_desk: {str(e)}")
+        return "An error occurred while processing your request. Please try again later."
 
-# Example usage
+# Agent Functions
+def process_intake(user_id: str, issue_description: str) -> Dict:
+    """Process the user intake and return structured information"""
+    try:
+        request_id = system_memory.add_request(user_id, issue_description)
+        keywords = extract_keywords(issue_description)
+        
+        system_memory.update_request(
+            request_id=request_id,
+            agent="User_Intake_Agent",
+            action="processed_request",
+            details={"keywords": keywords}
+        )
+        
+        return {
+            "request_id": request_id,
+            "user_id": user_id,
+            "issue_description": issue_description,
+            "keywords": keywords
+        }
+    except Exception as e:
+        logger.error(f"Error in process_intake: {str(e)}")
+        raise
+
+def attempt_resolution(request_id: int, keywords: List[str], issue_description: str) -> Dict:
+    """Attempt to resolve the issue using AI-generated solution"""
+    try:
+        similar_requests = system_memory.get_similar_requests(keywords)
+        success, solution = generate_ai_solution(issue_description, keywords)
+        
+        if success:
+            system_memory.update_request(
+                request_id=request_id,
+                agent="Resolution_Agent",
+                action="generated_solution",
+                details={"solution": solution}
+            )
+            
+            system_memory.set_resolution(request_id, solution)
+            
+            return {
+                "status": "resolved",
+                "solution": solution,
+                "similar_issues": similar_requests
+            }
+        else:
+            system_memory.update_request(
+                request_id=request_id,
+                agent="Resolution_Agent",
+                action="failed_to_generate_solution",
+                details={"error": solution}
+            )
+            
+            return {
+                "status": "unresolved",
+                "message": "Unable to generate solution",
+                "similar_issues": similar_requests
+            }
+    except Exception as e:
+        logger.error(f"Error in attempt_resolution: {str(e)}")
+        raise
+
+def escalate_issue(request_id: int, issue_description: str, keywords: List[str], attempted_solutions: List[str] = None) -> Dict:
+    """Escalate the issue to human IT support"""
+    try:
+        ticket_number = f"IT-{request_id}-{int(time.time())}"
+        
+        issue_summary_prompt = f"""
+        You are an IT support specialist. Summarize the following user issue for IT staff:
+        
+        "{issue_description}"
+        
+        Keywords identified: {', '.join(keywords)}
+        
+        Create a concise technical summary that would help IT staff understand the issue quickly.
+        Include likely technical causes and any information that the staff should gather from the user.
+        """
+        
+        try:
+            model = genai.GenerativeModel('gemini-2.0-flash')
+            response = model.generate_content(issue_summary_prompt)
+            technical_summary = response.text.strip() if response and hasattr(response, 'text') else "No technical summary available."
+        except Exception as e:
+            logger.error(f"Error generating technical summary: {e}")
+            technical_summary = f"Error generating technical summary: {str(e)}"
+        
+        summary = {
+            "ticket_number": ticket_number,
+            "user_id": system_memory.get_request(request_id)["user_id"],
+            "issue_description": issue_description,
+            "technical_summary": technical_summary,
+            "keywords": keywords,
+            "attempted_solutions": attempted_solutions or [],
+            "priority": "medium",
+            "estimated_response_time": "4 hours"
+        }
+        
+        system_memory.update_request(
+            request_id=request_id,
+            agent="Escalation_Agent",
+            action="escalated",
+            details=summary
+        )
+        
+        system_memory.set_status(request_id, "escalated")
+        
+        return summary
+    except Exception as e:
+        logger.error(f"Error in escalate_issue: {str(e)}")
+        raise
+
 if __name__ == "__main__":
     user_id = "emp12345"
     user_request = "My VPN is not working. I tried to connect but it keeps failing with a timeout error."

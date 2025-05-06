@@ -2,6 +2,6 @@ streamlit>=1.25.0
 python-dotenv>=1.0.0
 openai>=1.0.0
 langchain>=0.1.0
-langchain-google-genai>=0.0.8
-google-generativeai>=0.3.2
-autogen
+langchain-google-genai>=0.0.5
+google-generativeai>=0.3.0
+autogen>=0.2.0
